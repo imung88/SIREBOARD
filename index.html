@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Local Whiteboard</title>
+<style>
+  body { margin: 0; }
+  canvas { background: #fff; display: block; margin: 0 auto; touch-action: none; }
+</style>
+</head>
+<body>
+
+<canvas id="board" width="1280" height="720"></canvas>
+
+<script>
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+let drawing = false;
+
+// Prevent scrolling on touch devices
+canvas.addEventListener("touchstart", e => e.preventDefault(), { passive: false });
+canvas.addEventListener("touchmove", e => e.preventDefault(), { passive: false });
+
+// MOUSE EVENTS
+canvas.addEventListener('mousedown', () => drawing = true);
+canvas.addEventListener('mouseup', () => drawing = false);
+canvas.addEventListener('mousemove', e => {
+  if (!drawing) return;
+  const pos = { x: e.offsetX, y: e.offsetY };
+  draw(pos);
+  sendStroke(pos);
+});
+
+// TOUCH EVENTS
+canvas.addEventListener('touchstart', e => {
+  drawing = true;
+});
+
+canvas.addEventListener('touchend', () => {
+  drawing = false;
+});
+
+canvas.addEventListener('touchmove', e => {
+  if (!drawing) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const touch = e.touches[0];
+
+  const pos = {
+    x: touch.clientX - rect.left,
+    y: touch.clientY - rect.top
+  };
+
+  draw(pos);
+  sendStroke(pos);
+});
+
+// Draw a point
+function draw(pos) {
+  ctx.fillStyle = "black";
+  ctx.fillRect(pos.x, pos.y, 4, 4);
+}
+
+// Send stroke to server
+function sendStroke(pos) {
+  fetch("save.php", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(pos)
+  });
+}
+
+// Poll strokes every 100ms
+setInterval(() => {
+  fetch("load.php")
+    .then(r => r.json())
+    .then(strokes => {
+      strokes.forEach(draw);
+    });
+}, 500);
+
+</script>
+
+</body>
+</html>
