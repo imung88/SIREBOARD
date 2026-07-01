@@ -2,83 +2,248 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Local Whiteboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>SIREBOARD</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
 <style>
-  body { margin: 0; }
-  canvas { background: #fff; display: block; margin: 0 auto; touch-action: none; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #f0f0f0; touch-action: none; }
+  #toolbar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    background: #2c2c2c; padding: 6px 12px;
+    display: flex; align-items: center; gap: 8px;
+    flex-wrap: wrap; user-select: none;
+  }
+  #toolbar .sep {
+    width: 1px; height: 28px; background: #555; flex-shrink: 0;
+  }
+  #toolbar button {
+    border: 2px solid transparent; border-radius: 4px;
+    padding: 4px 10px; font-size: 13px; cursor: pointer;
+    background: #444; color: #eee; font-family: sans-serif;
+  }
+  #toolbar button:hover { background: #555; }
+  #toolbar button.active { border-color: #fff; background: #666; }
+  #toolbar .color-btn {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 2px solid transparent; cursor: pointer; padding: 0;
+  }
+  #toolbar .color-btn:hover { opacity: 0.8; }
+  #toolbar .color-btn.active { border-color: #fff; }
+  #canvas-container {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    touch-action: none; overflow: hidden;
+  }
 </style>
 </head>
 <body>
 
-<canvas id="board" width="1280" height="720"></canvas>
+<div id="toolbar">
+  <button data-size="2" class="active" title="Small">Small</button>
+  <button data-size="4" title="Medium">Medium</button>
+  <button data-size="8" title="Large">Large</button>
+  <div class="sep"></div>
+  <button class="color-btn active" data-color="#000000" style="background:#000000" title="Black"></button>
+  <button class="color-btn" data-color="#e74c3c" style="background:#e74c3c" title="Red"></button>
+  <button class="color-btn" data-color="#2980b9" style="background:#2980b9" title="Blue"></button>
+  <button class="color-btn" data-color="#27ae60" style="background:#27ae60" title="Green"></button>
+  <div class="sep"></div>
+  <button id="btn-undo" title="Undo">Undo</button>
+  <button id="btn-clear" title="Clear Board">Clear</button>
+</div>
+
+<div id="canvas-container">
+  <canvas id="board"></canvas>
+</div>
 
 <script>
-const canvas = document.getElementById('board');
-const ctx = canvas.getContext('2d');
-let drawing = false;
+(function () {
+  var VIRTUAL_W = 1920;
+  var VIRTUAL_H = 1080;
+  var BASE_BRUSH = 4;
 
-// Prevent scrolling on touch devices
-canvas.addEventListener("touchstart", e => e.preventDefault(), { passive: false });
-canvas.addEventListener("touchmove", e => e.preventDefault(), { passive: false });
+  var container = document.getElementById('canvas-container');
+  var toolbar = document.getElementById('toolbar');
 
-// MOUSE EVENTS
-canvas.addEventListener('mousedown', () => drawing = true);
-canvas.addEventListener('mouseup', () => drawing = false);
-canvas.addEventListener('mousemove', e => {
-  if (!drawing) return;
-  const pos = { x: e.offsetX, y: e.offsetY };
-  draw(pos);
-  sendStroke(pos);
-});
-
-// TOUCH EVENTS
-canvas.addEventListener('touchstart', e => {
-  drawing = true;
-});
-
-canvas.addEventListener('touchend', () => {
-  drawing = false;
-});
-
-canvas.addEventListener('touchmove', e => {
-  if (!drawing) return;
-
-  const rect = canvas.getBoundingClientRect();
-  const touch = e.touches[0];
-
-  const pos = {
-    x: touch.clientX - rect.left,
-    y: touch.clientY - rect.top
-  };
-
-  draw(pos);
-  sendStroke(pos);
-});
-
-// Draw a point
-function draw(pos) {
-  ctx.fillStyle = "black";
-  ctx.fillRect(pos.x, pos.y, 4, 4);
-}
-
-// Send stroke to server
-function sendStroke(pos) {
-  fetch("save.php", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(pos)
+  var fabricCanvas = new fabric.Canvas('board', {
+    isDrawingMode: true,
+    backgroundColor: '#ffffff',
+    width: VIRTUAL_W,
+    height: VIRTUAL_H
   });
-}
 
-// Poll strokes every 100ms
-setInterval(() => {
-  fetch("load.php")
-    .then(r => r.json())
-    .then(strokes => {
-      strokes.forEach(draw);
+  var brush = new fabric.PencilBrush(fabricCanvas);
+  brush.width = BASE_BRUSH;
+  brush.color = '#000000';
+  brush.strokeLineCap = 'round';
+  brush.strokeLineJoin = 'round';
+  fabricCanvas.freeDrawingBrush = brush;
+
+  var currentScale = 1;
+  var localPaths = [];
+  var lastLoadedId = 0;
+  var syncInterval = null;
+
+  function showError(msg, duration) {
+    toolbar.style.background = '#8b0000';
+    setTimeout(function () { toolbar.style.background = '#2c2c2c'; }, duration || 2000);
+  }
+
+  function updateBrushWidth() {
+    brush.width = BASE_BRUSH / currentScale;
+  }
+
+  function resizeCanvas() {
+    var w = window.innerWidth;
+    var toolbarH = toolbar.offsetHeight;
+    var h = window.innerHeight - toolbarH;
+
+    container.style.top = toolbarH + 'px';
+
+    var scaleX = w / VIRTUAL_W;
+    var scaleY = h / VIRTUAL_H;
+    var scale = Math.min(scaleX, scaleY);
+
+    currentScale = scale;
+    fabricCanvas.setZoom(scale);
+
+    var canvasW = Math.floor(VIRTUAL_W * scale);
+    var canvasH = Math.floor(VIRTUAL_H * scale);
+
+    container.style.width = canvasW + 'px';
+    container.style.height = canvasH + 'px';
+    fabricCanvas.setDimensions({ width: canvasW, height: canvasH });
+    fabricCanvas.calcOffset();
+
+    updateBrushWidth();
+  }
+
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  function postStroke(strokeData, pathObj) {
+    fetch('save.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stroke: strokeData })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (resp) {
+      if (resp.error) {
+        showError('Failed to save stroke');
+        return;
+      }
+      if (resp.id && pathObj) {
+        pathObj._serverId = resp.id;
+      }
+      pollStrokes();
+    })
+    .catch(function () {
+      showError('Connection error');
     });
-}, 500);
+  }
 
+  fabricCanvas.on('path:created', function (e) {
+    var path = e.path;
+    path._serverId = null;
+    localPaths.push(path);
+    postStroke(path.toJSON(), path);
+  });
+
+  function pollStrokes() {
+    fetch('load.php?lastId=' + lastLoadedId)
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.strokes || data.strokes.length === 0) {
+          if (lastLoadedId > 0 && data.lastId === 0) {
+            fabricCanvas.clear();
+            fabricCanvas.backgroundColor = '#ffffff';
+            fabricCanvas.renderAll();
+            lastLoadedId = 0;
+            localPaths = [];
+          }
+          return;
+        }
+        var maxId = data.lastId;
+        var localIds = {};
+        fabricCanvas.getObjects().forEach(function (obj) {
+          if (obj._serverId) localIds[obj._serverId] = true;
+        });
+        data.strokes.forEach(function (entry) {
+          if (localIds[entry.id]) return;
+          fabric.util.enlivenObjects([entry.stroke], function (objects) {
+            objects.forEach(function (obj) {
+              obj._serverId = entry.id;
+              obj.selectable = false;
+              obj.evented = false;
+              fabricCanvas.add(obj);
+            });
+          });
+        });
+        if (maxId > lastLoadedId) lastLoadedId = maxId;
+      })
+      .catch(function () {});
+  }
+
+  syncInterval = setInterval(pollStrokes, 1000);
+  pollStrokes();
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (syncInterval) { clearInterval(syncInterval); syncInterval = null; }
+    } else {
+      pollStrokes();
+      if (!syncInterval) { syncInterval = setInterval(pollStrokes, 1000); }
+    }
+  });
+
+  document.getElementById('btn-undo').addEventListener('click', function () {
+    if (localPaths.length === 0) return;
+    var path = localPaths.pop();
+    var serverId = path._serverId;
+    fabricCanvas.remove(path);
+    fabricCanvas.renderAll();
+    if (serverId) {
+      fetch('delete.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: serverId })
+      })
+      .catch(function () { showError('Failed to delete stroke'); });
+    }
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', function () {
+    if (!confirm('Clear the entire board for all users?')) return;
+    fetch('clear.php', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function () {
+        fabricCanvas.clear();
+        fabricCanvas.backgroundColor = '#ffffff';
+        fabricCanvas.renderAll();
+        lastLoadedId = 0;
+        localPaths = [];
+      })
+      .catch(function () { showError('Failed to clear'); });
+  });
+
+  document.querySelectorAll('button[data-size]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('button[data-size]').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      BASE_BRUSH = parseInt(btn.getAttribute('data-size'));
+      updateBrushWidth();
+    });
+  });
+
+  document.querySelectorAll('.color-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.color-btn').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      brush.color = btn.getAttribute('data-color');
+    });
+  });
+})();
 </script>
 
 </body>

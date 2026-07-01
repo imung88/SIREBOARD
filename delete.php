@@ -3,7 +3,7 @@ header('Content-Type: application/json');
 
 $input = json_decode(file_get_contents("php://input"), true);
 
-if (!$input || !isset($input['stroke'])) {
+if (!$input || !isset($input['id'])) {
     http_response_code(400);
     echo json_encode(['error' => 'Invalid request']);
     exit;
@@ -29,19 +29,10 @@ $content = stream_get_contents($fp);
 $strokes = json_decode($content, true);
 if (!is_array($strokes)) { $strokes = []; }
 
-$maxId = 0;
-foreach ($strokes as $s) {
-    if (isset($s['id']) && $s['id'] > $maxId) {
-        $maxId = $s['id'];
-    }
-}
-
-$newStroke = [
-    'id' => $maxId + 1,
-    'stroke' => $input['stroke']
-];
-
-$strokes[] = $newStroke;
+$targetId = (int) $input['id'];
+$strokes = array_values(array_filter($strokes, function ($s) use ($targetId) {
+    return $s['id'] !== $targetId;
+}));
 
 rewind($fp);
 ftruncate($fp, 0);
@@ -51,5 +42,5 @@ fflush($fp);
 flock($fp, LOCK_UN);
 fclose($fp);
 
-echo json_encode(['id' => $newStroke['id']]);
+echo json_encode(['ok' => true]);
 ?>
