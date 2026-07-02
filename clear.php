@@ -1,24 +1,17 @@
 <?php
 header('Content-Type: application/json');
 
-$file = "strokes.json";
+require_once __DIR__ . '/db.php';
 
-$fp = fopen($file, "c+");
-if (!$fp) {
+$db = getDB();
+
+if ($db->exec('DELETE FROM strokes')) {
+    $db->exec("DELETE FROM sqlite_sequence WHERE name='strokes'");
+    echo json_encode(['ok' => true]);
+} else {
     http_response_code(500);
-    echo json_encode(['error' => 'File error']);
-    exit;
+    echo json_encode(['error' => 'Clear failed']);
 }
 
-flock($fp, LOCK_EX);
-
-rewind($fp);
-ftruncate($fp, 0);
-fwrite($fp, "[]");
-
-fflush($fp);
-flock($fp, LOCK_UN);
-fclose($fp);
-
-echo json_encode(['ok' => true]);
+$db->close();
 ?>

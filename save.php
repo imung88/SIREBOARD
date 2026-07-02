@@ -9,47 +9,21 @@ if (!$input || !isset($input['stroke'])) {
     exit;
 }
 
-$file = "strokes.json";
+require_once __DIR__ . '/db.php';
 
-if (!file_exists($file)) {
-    file_put_contents($file, "[]");
-}
+$db = getDB();
+migrateIfNeeded($db);
 
-$fp = fopen($file, "c+");
-if (!$fp) {
+$stmt = $db->prepare('INSERT INTO strokes (stroke) VALUES (:stroke)');
+$stmt->bindValue(':stroke', is_string($input['stroke']) ? $input['stroke'] : json_encode($input['stroke']), SQLITE3_TEXT);
+
+if ($stmt->execute()) {
+    $id = $db->lastInsertRowID();
+    echo json_encode(['id' => $id]);
+} else {
     http_response_code(500);
-    echo json_encode(['error' => 'File error']);
-    exit;
+    echo json_encode(['error' => 'Insert failed']);
 }
 
-flock($fp, LOCK_EX);
-
-rewind($fp);
-$content = stream_get_contents($fp);
-$strokes = json_decode($content, true);
-if (!is_array($strokes)) { $strokes = []; }
-
-$maxId = 0;
-foreach ($strokes as $s) {
-    if (isset($s['id']) && $s['id'] > $maxId) {
-        $maxId = $s['id'];
-    }
-}
-
-$newStroke = [
-    'id' => $maxId + 1,
-    'stroke' => $input['stroke']
-];
-
-$strokes[] = $newStroke;
-
-rewind($fp);
-ftruncate($fp, 0);
-fwrite($fp, json_encode($strokes));
-
-fflush($fp);
-flock($fp, LOCK_UN);
-fclose($fp);
-
-echo json_encode(['id' => $newStroke['id']]);
+$db->close();
 ?>

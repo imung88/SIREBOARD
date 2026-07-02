@@ -9,16 +9,22 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { overflow: hidden; background: #f0f0f0; touch-action: none; }
   #toolbar {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-    background: #2c2c2c; padding: 6px 12px;
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 100;
+    background: rgba(44, 44, 44, 0.85); backdrop-filter: blur(8px);
+    padding: 6px 16px; border-radius: 24px;
     display: flex; align-items: center; gap: 8px;
-    flex-wrap: wrap; user-select: none;
+    user-select: none; cursor: grab;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+    transition: opacity 0.2s;
+    flex-wrap: wrap;
   }
+  #toolbar:active { cursor: grabbing; }
   #toolbar .sep {
     width: 1px; height: 28px; background: #555; flex-shrink: 0;
   }
   #toolbar button {
-    border: 2px solid transparent; border-radius: 4px;
+    border: 2px solid transparent; border-radius: 12px;
     padding: 4px 10px; font-size: 13px; cursor: pointer;
     background: #444; color: #eee; font-family: sans-serif;
   }
@@ -48,6 +54,7 @@
   <button class="color-btn" data-color="#2980b9" style="background:#2980b9" title="Blue"></button>
   <button class="color-btn" data-color="#27ae60" style="background:#27ae60" title="Green"></button>
   <div class="sep"></div>
+  <button id="btn-text" title="Text Tool">Text</button>
   <button id="btn-undo" title="Undo">Undo</button>
   <button id="btn-clear" title="Clear Board">Clear</button>
 </div>
@@ -58,8 +65,8 @@
 
 <script>
 (function () {
-  var VIRTUAL_W = 1920;
-  var VIRTUAL_H = 1080;
+  var VIRTUAL_W = 1440;
+  var VIRTUAL_H = 900;
   var BASE_BRUSH = 4;
 
   var container = document.getElementById('canvas-container');
@@ -83,10 +90,11 @@
   var localPaths = [];
   var lastLoadedId = 0;
   var syncInterval = null;
+  var currentTool = 'draw';
 
   function showError(msg, duration) {
     toolbar.style.background = '#8b0000';
-    setTimeout(function () { toolbar.style.background = '#2c2c2c'; }, duration || 2000);
+    setTimeout(function () { toolbar.style.background = 'rgba(44, 44, 44, 0.85)'; }, duration || 2000);
   }
 
   function updateBrushWidth() {
@@ -95,10 +103,7 @@
 
   function resizeCanvas() {
     var w = window.innerWidth;
-    var toolbarH = toolbar.offsetHeight;
-    var h = window.innerHeight - toolbarH;
-
-    container.style.top = toolbarH + 'px';
+    var h = window.innerHeight;
 
     var scaleX = w / VIRTUAL_W;
     var scaleY = h / VIRTUAL_H;
@@ -121,7 +126,7 @@
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
 
-  function postStroke(strokeData, pathObj) {
+  function postStroke(strokeData, obj) {
     fetch('save.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -133,8 +138,8 @@
         showError('Failed to save stroke');
         return;
       }
-      if (resp.id && pathObj) {
-        pathObj._serverId = resp.id;
+      if (resp.id && obj) {
+        obj._serverId = resp.id;
       }
       pollStrokes();
     })
@@ -148,6 +153,65 @@
     path._serverId = null;
     localPaths.push(path);
     postStroke(path.toJSON(), path);
+  });
+
+  function setTool(tool) {
+    currentTool = tool;
+    document.getElementById('btn-text').classList.toggle('active', tool === 'text');
+    if (tool === 'text') {
+      fabricCanvas.isDrawingMode = false;
+      fabricCanvas.selection = false;
+      fabricCanvas.defaultCursor = 'text';
+      fabricCanvas.hoverCursor = 'text';
+    } else {
+      fabricCanvas.isDrawingMode = true;
+      fabricCanvas.selection = false;
+      fabricCanvas.defaultCursor = 'default';
+      fabricCanvas.hoverCursor = 'default';
+    }
+  }
+
+  fabricCanvas.on('mouse:down', function (opt) {
+    if (currentTool !== 'text') return;
+    if (opt.target) return;
+
+    var pointer = fabricCanvas.getPointer(opt.e);
+    var text = new fabric.IText('Type here...', {
+      left: pointer.x,
+      top: pointer.y,
+      fontFamily: 'sans-serif',
+      fontSize: 20,
+      fill: brush.color,
+      editable: true
+    });
+    text._serverId = null;
+    fabricCanvas.add(text);
+    fabricCanvas.setActiveObject(text);
+    text.enterEditing();
+    text.selectAll();
+  });
+
+  fabricCanvas.on('text:editing:exited', function (e) {
+    var textObj = e.target;
+    if (!textObj) return;
+
+    if (textObj.text === '' || textObj.text === 'Type here...') {
+      fabricCanvas.remove(textObj);
+      fabricCanvas.renderAll();
+      return;
+    }
+
+    textObj.selectable = false;
+    textObj.evented = false;
+    textObj._serverId = null;
+    localPaths.push(textObj);
+    postStroke(textObj.toJSON(), textObj);
+
+    setTool('draw');
+  });
+
+  document.getElementById('btn-text').addEventListener('click', function () {
+    setTool(currentTool === 'text' ? 'draw' : 'text');
   });
 
   function pollStrokes() {
@@ -243,6 +307,57 @@
       brush.color = btn.getAttribute('data-color');
     });
   });
+
+  var dragState = null;
+
+  function isButton(el) {
+    while (el && el !== toolbar) {
+      if (el.tagName === 'BUTTON') return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+
+  function onDragStart(e) {
+    if (isButton(e.target)) return;
+    e.preventDefault();
+    var touch = e.touches ? e.touches[0] : e;
+    var rect = toolbar.getBoundingClientRect();
+    dragState = {
+      offsetX: touch.clientX - rect.left,
+      offsetY: touch.clientY - rect.top
+    };
+    toolbar.style.transform = 'none';
+    toolbar.style.left = rect.left + 'px';
+    toolbar.style.top = rect.top + 'px';
+    toolbar.style.cursor = 'grabbing';
+  }
+
+  function onDragMove(e) {
+    if (!dragState) return;
+    e.preventDefault();
+    var touch = e.touches ? e.touches[0] : e;
+    var x = touch.clientX - dragState.offsetX;
+    var y = touch.clientY - dragState.offsetY;
+    x = Math.max(0, Math.min(x, window.innerWidth - toolbar.offsetWidth));
+    y = Math.max(0, Math.min(y, window.innerHeight - toolbar.offsetHeight));
+    toolbar.style.left = x + 'px';
+    toolbar.style.top = y + 'px';
+  }
+
+  function onDragEnd() {
+    if (!dragState) return;
+    dragState = null;
+    toolbar.style.cursor = 'grab';
+  }
+
+  toolbar.addEventListener('mousedown', onDragStart);
+  document.addEventListener('mousemove', onDragMove);
+  document.addEventListener('mouseup', onDragEnd);
+
+  toolbar.addEventListener('touchstart', onDragStart, { passive: false });
+  document.addEventListener('touchmove', onDragMove, { passive: false });
+  document.addEventListener('touchend', onDragEnd);
 })();
 </script>
 
